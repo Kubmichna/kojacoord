@@ -9,6 +9,7 @@ members = [
     "crates/plugin-system",
     "crates/cluster",
     "crates/metrics",
+    "wasm_mock"
 ]
 resolver = "2"
 

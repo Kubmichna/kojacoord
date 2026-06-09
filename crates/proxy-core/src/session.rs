@@ -4,6 +4,12 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientType {
+    Java,
+    Bedrock { xuid: String, device_os: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectionState {
     Handshaking,
     Status,
@@ -17,6 +23,7 @@ pub struct PlayerSession {
     pub username: String,
     pub client_ip: IpAddr,
     pub protocol_version: u32,
+    pub client_type: ClientType,
     pub state: ConnectionState,
     pub current_server: Option<String>,
     pub properties: Vec<kojacoord_auth::ProfileProperty>,

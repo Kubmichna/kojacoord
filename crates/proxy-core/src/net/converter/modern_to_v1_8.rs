@@ -7,10 +7,16 @@ use crate::converter::ConversionResult;
 
 use super::{build_payload, nearest, split_id};
 
+fn encode_string(s: &str, out: &mut BytesMut) {
+    let bytes = s.as_bytes();
+    VarInt(bytes.len() as i32).encode(out).unwrap();
+    out.put_slice(bytes);
+}
+
 pub fn convert_s2c(payload: Bytes, server_proto: u32) -> ConversionResult {
     let ver = nearest(server_proto);
     let Some((id, body)) = split_id(payload.clone()) else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
 
     match ver {
@@ -29,28 +35,30 @@ fn dispatch_1_12(id: u8, body: Bytes) -> ConversionResult {
         0x2F => s2c_player_pos_look(body),
         0x0F => s2c_chat(body),
         0x41 => s2c_set_health(body),
-        0x33 => s2c_respawn(body),
+        0x35 => s2c_respawn(body),
         0x1F => s2c_keep_alive_long(body),
-        0x44 => s2c_time_update(body),
-        0x3E => s2c_tab_list(body),
-        0x4A => s2c_entity_velocity(body),
-        0x26 => ConversionResult::Drop,
-        0x18 => s2c_entity_teleport(body),
-        0x15 => s2c_entity_rel_move(body),
-        0x0E => s2c_entity(body),
-        0x13 => s2c_entity_destroy(body),
-        0x19 => s2c_block_change(body),
-        0x09 => s2c_held_item_change(body),
-        0x3D => s2c_sound_effect(body),
-
-        0x30 => s2c_window_items(body, ProtocolVersion::V1_12_2),
-        0x1C => s2c_entity_metadata(body),
-        0x03 => s2c_entity_equipment(body, ProtocolVersion::V1_12_2),
-        0x1D => s2c_experience(body),
-        0x3B => s2c_scoreboard_obj(body),
-        0x3C => s2c_scoreboard_score(body),
-        _ => ConversionResult::Passthrough,
+        0x47 => s2c_time_update(body),
+        0x4A => s2c_tab_list(body),
+        0x3E => s2c_entity_velocity(body),
+        0x24 => ConversionResult::Drop,
+        0x4C => s2c_entity_teleport(body),
+        0x25 => s2c_entity_rel_move(body),
+        0x32 => s2c_entity_destroy(body),
+        0x0B => s2c_block_change(body),
+        0x3A => s2c_held_item_change(body),
+        0x14 => s2c_window_items(body, ProtocolVersion::V1_12_2),
+        0x18 => s2c_plugin_message(body),
+        0x3F => s2c_entity_equipment(body, ProtocolVersion::V1_12_2),
+        0x40 => s2c_experience(body),
+        0x42 => s2c_scoreboard_obj(body),
+        0x45 => s2c_scoreboard_score(body),
+        0x46 => ConversionResult::Converted(vec![build_payload(0x05, &body)]),
+        _ => ConversionResult::Drop,
     }
+}
+
+fn s2c_plugin_message(body: Bytes) -> ConversionResult {
+    ConversionResult::Converted(vec![build_payload(0x3F, &body)])
 }
 
 fn dispatch_1_16(id: u8, body: Bytes) -> ConversionResult {
@@ -78,7 +86,7 @@ fn dispatch_1_16(id: u8, body: Bytes) -> ConversionResult {
         0x3B => s2c_scoreboard_obj(body),
         0x3C => s2c_scoreboard_score(body),
         0x47 => s2c_held_item_change(body),
-        _ => ConversionResult::Passthrough,
+        _ => ConversionResult::Drop,
     }
 }
 
@@ -108,17 +116,17 @@ fn dispatch_modern(id: u8, body: Bytes, server_proto: u32) -> ConversionResult {
         0x3B => s2c_scoreboard_obj(body),
         0x3C => s2c_scoreboard_score(body),
         0x48 => s2c_held_item_change(body),
-        _ => ConversionResult::Passthrough,
+        _ => ConversionResult::Drop,
     }
 }
 
 fn s2c_join_game(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(entity_id) = r.i32() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(gm) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let gamemode = gm & 0x03;
 
@@ -134,7 +142,7 @@ fn s2c_join_game(body: Bytes) -> ConversionResult {
     out.put_i8(dimension);
     out.put_u8(difficulty);
     out.put_u8(max_players);
-    level_type.encode(&mut out).unwrap();
+    encode_string(&level_type, &mut out);
     out.put_u8(0);
     ConversionResult::Converted(vec![build_payload(0x01, &out)])
 }
@@ -142,19 +150,19 @@ fn s2c_join_game(body: Bytes) -> ConversionResult {
 fn s2c_player_pos_look(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(x) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(y) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(z) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(yaw) = r.f32() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(pitch) = r.f32() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let flags = r.u8().unwrap_or(0);
 
@@ -170,7 +178,7 @@ fn s2c_player_pos_look(body: Bytes) -> ConversionResult {
 
 fn s2c_chat(mut body: Bytes) -> ConversionResult {
     let Ok(json) = String::decode(&mut body) else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let position = if body.remaining() >= 1 {
         body.get_u8()
@@ -178,14 +186,14 @@ fn s2c_chat(mut body: Bytes) -> ConversionResult {
         0
     };
     let mut out = BytesMut::new();
-    json.encode(&mut out).unwrap();
+    encode_string(&json, &mut out);
     out.put_u8(position);
     ConversionResult::Converted(vec![build_payload(0x02, &out)])
 }
 
 fn s2c_system_chat(mut body: Bytes) -> ConversionResult {
     let Ok(content) = String::decode(&mut body) else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let _overlay = if body.remaining() >= 1 {
         body.get_u8()
@@ -193,7 +201,7 @@ fn s2c_system_chat(mut body: Bytes) -> ConversionResult {
         0
     };
     let mut out = BytesMut::new();
-    content.encode(&mut out).unwrap();
+    encode_string(&content, &mut out);
     out.put_u8(1);
     ConversionResult::Converted(vec![build_payload(0x02, &out)])
 }
@@ -208,14 +216,14 @@ fn s2c_respawn(_body: Bytes) -> ConversionResult {
     out.put_i8(dimension);
     out.put_u8(2);
     out.put_u8(0);
-    "default".to_owned().encode(&mut out).unwrap();
+    encode_string("default", &mut out);
     ConversionResult::Converted(vec![build_payload(0x07, &out)])
 }
 
 fn s2c_keep_alive_long(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(id) = r.i64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let mut out = BytesMut::new();
     VarInt(id as i32).encode(&mut out).unwrap();
@@ -224,7 +232,7 @@ fn s2c_keep_alive_long(body: Bytes) -> ConversionResult {
 
 fn s2c_held_item_change(mut body: Bytes) -> ConversionResult {
     if body.remaining() < 1 {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     }
     let slot = body.get_u8();
     let mut out = BytesMut::new();
@@ -232,12 +240,13 @@ fn s2c_held_item_change(mut body: Bytes) -> ConversionResult {
     ConversionResult::Converted(vec![build_payload(0x09, &out)])
 }
 
+#[allow(dead_code)]
 fn s2c_sound_effect(mut body: Bytes) -> ConversionResult {
     let Ok(sound_name) = String::decode(&mut body) else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     if body.remaining() < 4 + 4 + 4 + 4 + 1 {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     }
     let x = body.get_i32();
     let y = body.get_i32();
@@ -246,7 +255,7 @@ fn s2c_sound_effect(mut body: Bytes) -> ConversionResult {
     let pitch = body.get_u8();
 
     let mut out = BytesMut::new();
-    sound_name.encode(&mut out).unwrap();
+    encode_string(&sound_name, &mut out);
     out.put_i32(x);
     out.put_i32(y);
     out.put_i32(z);
@@ -260,7 +269,7 @@ fn s2c_time_update(body: Bytes) -> ConversionResult {
 }
 
 fn s2c_tab_list(body: Bytes) -> ConversionResult {
-    ConversionResult::Converted(vec![build_payload(0x48, &body)])
+    ConversionResult::Converted(vec![build_payload(0x47, &body)])
 }
 
 fn s2c_entity_velocity(body: Bytes) -> ConversionResult {
@@ -270,106 +279,108 @@ fn s2c_entity_velocity(body: Bytes) -> ConversionResult {
 fn s2c_entity_teleport(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(entity_id) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(x) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let x = x as i32;
+    let x = (x * 32.0).round() as i32;
     let Some(y) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let y = y as i32;
+    let y = (y * 32.0).round() as i32;
     let Some(z) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let z = z as i32;
+    let z = (z * 32.0).round() as i32;
     let Some(yaw) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(pitch) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
 
     let mut out = BytesMut::new();
-    out.put_i32(entity_id);
+    VarInt(entity_id).encode(&mut out).unwrap();
     out.put_i32(x);
     out.put_i32(y);
     out.put_i32(z);
     out.put_u8(yaw);
     out.put_u8(pitch);
+    out.put_u8(0);
     ConversionResult::Converted(vec![build_payload(0x18, &out)])
 }
 
 fn s2c_entity_rel_move(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(entity_id) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(dx) = r.i16() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let dx = dx as i8;
     let Some(dy) = r.i16() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let dy = dy as i8;
     let Some(dz) = r.i16() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let dz = dz as i8;
 
     let mut out = BytesMut::new();
-    out.put_i32(entity_id);
+    VarInt(entity_id).encode(&mut out).unwrap();
     out.put_i8(dx);
     out.put_i8(dy);
     out.put_i8(dz);
+    out.put_u8(0);
     ConversionResult::Converted(vec![build_payload(0x15, &out)])
 }
 
 fn s2c_entity(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(entity_id) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(_uuid) = r.take(16) else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(entity_type) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let entity_type = entity_type as u8;
     let Some(x) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let x = x as i32;
+    let x = (x * 32.0).round() as i32;
     let Some(y) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let y = y as i32;
+    let y = (y * 32.0).round() as i32;
     let Some(z) = r.f64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let z = z as i32;
+    let z = (z * 32.0).round() as i32;
     let Some(yaw) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(pitch) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
-    let Some(head_yaw) = r.u8() else {
-        return ConversionResult::Passthrough;
+    let Some(_head_yaw) = r.u8() else {
+        return ConversionResult::Drop;
     };
 
     let mut out = BytesMut::new();
-    out.put_i32(entity_id);
+    VarInt(entity_id).encode(&mut out).unwrap();
     out.put_u8(entity_type);
     out.put_i32(x);
     out.put_i32(y);
     out.put_i32(z);
     out.put_u8(yaw);
     out.put_u8(pitch);
-    out.put_u8(head_yaw);
+    out.put_i32(0);
     ConversionResult::Converted(vec![build_payload(0x0E, &out)])
 }
 
@@ -395,10 +406,10 @@ fn s2c_entity_destroy(mut body: Bytes) -> ConversionResult {
 fn s2c_block_change(body: Bytes) -> ConversionResult {
     let mut r = super::safe::Reader::new(body);
     let Some(pos) = r.i64() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let Some(block_state) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
 
     let x = ((pos >> 38) & 0x3FFFFFF) as i32;
@@ -414,7 +425,7 @@ fn s2c_block_change(body: Bytes) -> ConversionResult {
     out.put_i32(z);
     VarInt(block_id).encode(&mut out).unwrap();
     out.put_u8(metadata);
-    ConversionResult::Converted(vec![build_payload(0x19, &out)])
+    ConversionResult::Converted(vec![build_payload(0x23, &out)])
 }
 
 fn s2c_set_slot(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
@@ -423,13 +434,13 @@ fn s2c_set_slot(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
     }
     let mut r = super::safe::Reader::new(body);
     let Some(window) = r.i8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     if super::items::has_state_id(ver) && r.varint().is_none() {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     }
     let Some(slot_idx) = r.i16() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
 
     let mut out = BytesMut::new();
@@ -437,20 +448,20 @@ fn s2c_set_slot(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
     out.put_i16(slot_idx);
     if super::items::modern_slot_parsable(ver) {
         let Some(slot) = r.slot() else {
-            return ConversionResult::Passthrough;
+            return ConversionResult::Drop;
         };
         if super::items::modern_slot_to_legacy(&slot)
             .encode(&mut out)
             .is_err()
         {
-            return ConversionResult::Passthrough;
+            return ConversionResult::Drop;
         }
     } else {
         if kojacoord_protocol::types::slot::LegacySlot(None)
             .encode(&mut out)
             .is_err()
         {
-            return ConversionResult::Passthrough;
+            return ConversionResult::Drop;
         }
     }
     ConversionResult::Converted(vec![build_payload(0x2F, &out)])
@@ -462,24 +473,24 @@ fn s2c_window_items(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
     }
     let mut r = super::safe::Reader::new(body);
     let Some(window) = r.u8() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
     let count: i32 = if super::items::has_state_id(ver) {
         if r.varint().is_none() {
-            return ConversionResult::Passthrough;
+            return ConversionResult::Drop;
         }
         match r.varint() {
             Some(c) => c,
-            None => return ConversionResult::Passthrough,
+            None => return ConversionResult::Drop,
         }
     } else {
         match r.i16() {
             Some(c) => c as i32,
-            None => return ConversionResult::Passthrough,
+            None => return ConversionResult::Drop,
         }
     };
     if !(0..=4096).contains(&count) {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     }
 
     let mut out = BytesMut::new();
@@ -488,13 +499,13 @@ fn s2c_window_items(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
     if super::items::modern_slot_parsable(ver) {
         for _ in 0..count {
             let Some(slot) = r.slot() else {
-                return ConversionResult::Passthrough;
+                return ConversionResult::Drop;
             };
             if super::items::modern_slot_to_legacy(&slot)
                 .encode(&mut out)
                 .is_err()
             {
-                return ConversionResult::Passthrough;
+                return ConversionResult::Drop;
             }
         }
     } else {
@@ -503,7 +514,7 @@ fn s2c_window_items(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
                 .encode(&mut out)
                 .is_err()
             {
-                return ConversionResult::Passthrough;
+                return ConversionResult::Drop;
             }
         }
     }
@@ -515,20 +526,36 @@ fn s2c_entity_metadata(body: Bytes) -> ConversionResult {
 }
 
 fn s2c_entity_equipment(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
+    if ver == ProtocolVersion::V1_12_2 {
+        let mut r = super::safe::Reader::new(body.clone());
+        let Some(entity_id) = r.varint() else {
+            return ConversionResult::Drop;
+        };
+        let Some(slot_enum) = r.varint() else {
+            return ConversionResult::Drop;
+        };
+        let remaining = r.rest();
+        let mut out = BytesMut::new();
+        VarInt(entity_id).encode(&mut out).unwrap();
+        out.put_i16(slot_enum as i16);
+        out.extend_from_slice(&remaining);
+        return ConversionResult::Converted(vec![build_payload(0x04, &out)]);
+    }
+
     if super::items::is_legacy_slot(ver) {
-        return ConversionResult::Converted(vec![build_payload(0x03, &body)]);
+        return ConversionResult::Converted(vec![build_payload(0x04, &body)]);
     }
     let mut r = super::safe::Reader::new(body);
     let Some(entity_id) = r.varint() else {
-        return ConversionResult::Passthrough;
+        return ConversionResult::Drop;
     };
 
     if !super::items::modern_slot_parsable(ver) {
         let mut out = BytesMut::new();
-        out.put_i32(entity_id);
+        VarInt(entity_id).encode(&mut out).unwrap();
         out.put_i16(0);
         let _ = kojacoord_protocol::types::slot::LegacySlot(None).encode(&mut out);
-        return ConversionResult::Converted(vec![build_payload(0x03, &out)]);
+        return ConversionResult::Converted(vec![build_payload(0x04, &out)]);
     }
 
     let mut packets = Vec::new();
@@ -540,13 +567,13 @@ fn s2c_entity_equipment(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
         };
         if let Some(v18_slot) = super::items::map_equipment_slot(idx) {
             let mut out = BytesMut::new();
-            out.put_i32(entity_id);
+            VarInt(entity_id).encode(&mut out).unwrap();
             out.put_i16(v18_slot);
             if super::items::modern_slot_to_legacy(&slot)
                 .encode(&mut out)
                 .is_ok()
             {
-                packets.push(build_payload(0x03, &out));
+                packets.push(build_payload(0x04, &out));
             }
         }
         if !has_more {
@@ -561,7 +588,22 @@ fn s2c_entity_equipment(body: Bytes, ver: ProtocolVersion) -> ConversionResult {
 }
 
 fn s2c_experience(body: Bytes) -> ConversionResult {
-    ConversionResult::Converted(vec![build_payload(0x1D, &body)])
+    let mut r = super::safe::Reader::new(body);
+    let Some(exp_bar) = r.f32() else {
+        return ConversionResult::Drop;
+    };
+    let Some(level) = r.varint() else {
+        return ConversionResult::Drop;
+    };
+    let Some(total_exp) = r.varint() else {
+        return ConversionResult::Drop;
+    };
+
+    let mut out = BytesMut::new();
+    out.put_f32(exp_bar);
+    VarInt(total_exp).encode(&mut out).unwrap();
+    VarInt(level).encode(&mut out).unwrap();
+    ConversionResult::Converted(vec![build_payload(0x1F, &out)])
 }
 
 fn s2c_scoreboard_obj(body: Bytes) -> ConversionResult {

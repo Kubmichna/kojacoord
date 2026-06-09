@@ -7,6 +7,9 @@ use std::path::Path;
 pub struct ProxyConfig {
     pub proxy: ProxySection,
 
+    #[serde(default)]
+    pub bedrock: BedrockSection,
+
     pub listeners: ListenersSection,
 
     pub forwarding: ForwardingSection,
@@ -109,6 +112,32 @@ impl Default for ProxySection {
             server_id: String::new(),
             eula_accepted: false,
             auth_url: default_auth_url(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BedrockSection {
+    #[serde(default = "default_bedrock_bind")]
+    pub bind: String,
+
+    #[serde(default = "default_bedrock_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_motd")]
+    pub motd: String,
+
+    #[serde(default = "default_max_players")]
+    pub max_players: usize,
+}
+
+impl Default for BedrockSection {
+    fn default() -> Self {
+        Self {
+            bind: default_bedrock_bind(),
+            enabled: default_bedrock_enabled(),
+            motd: default_motd(),
+            max_players: default_max_players(),
         }
     }
 }
@@ -365,6 +394,12 @@ pub struct MetricsBackendConfig {
 fn default_bind() -> String {
     "0.0.0.0:25565".into()
 }
+fn default_bedrock_bind() -> String {
+    "0.0.0.0:19132".into()
+}
+fn default_bedrock_enabled() -> bool {
+    true
+}
 fn default_online_mode() -> bool {
     true
 }
@@ -430,7 +465,7 @@ pub fn generate_secret() -> String {
 }
 
 /// Generate a stable node identity UUID.
-fn generate_server_id() -> String {
+pub fn generate_server_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 

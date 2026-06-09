@@ -18,13 +18,22 @@ fn lookup(proto: u32, state: ProtocolState, dir: Direction, name: &'static str) 
     REGISTRY
         .get_id_for_version(proto, state, dir, name)
         .unwrap_or_else(|| {
-            tracing::warn!(
-                packet_name = name,
-                protocol = proto,
-                ?state,
-                ?dir,
-                "packet not found in registry — using 0xFF"
+            let is_optional = matches!(
+                name,
+                "ClientboundLoginPluginRequest"
+                    | "ServerboundLoginPluginResponse"
+                    | "ServerboundLoginAcknowledged"
+                    | "AcknowledgeFinishConfiguration"
             );
+            if !is_optional {
+                tracing::warn!(
+                    packet_name = name,
+                    protocol = proto,
+                    ?state,
+                    ?dir,
+                    "packet not found in registry — using 0xFF"
+                );
+            }
             0xFF
         })
 }

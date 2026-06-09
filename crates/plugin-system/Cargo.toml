@@ -27,6 +27,7 @@ log = "0.4"
 bytes = { workspace = true }
 sha2 = "0.10"
 hex = "0.4"
+wasmtime = "21.0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

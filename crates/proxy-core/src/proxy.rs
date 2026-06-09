@@ -166,6 +166,7 @@ impl ProxyState {
                     online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
                     connection_pool: None,
                     backend_type: s.backend_type.clone(),
+                    backend_protocol: s.backend_protocol,
                 })
                 .await;
         }
@@ -389,6 +390,7 @@ impl ProxyState {
                             online: Arc::new(std::sync::atomic::AtomicBool::new(old_online)),
                             connection_pool: None,
                             backend_type: s.backend_type.clone(),
+                            backend_protocol: s.backend_protocol,
                         })
                         .await;
                     tracing::info!("Hot-reloaded (updated) server: {}", s.name);
@@ -400,10 +402,11 @@ impl ProxyState {
                         address: addr,
                         restricted: s.restricted,
                         forwarding_override: s.forwarding_override.clone(),
-                        player_count: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-                        online: Arc::new(std::sync::atomic::AtomicBool::new(true)),
+                        player_count: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                        online: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         connection_pool: None,
                         backend_type: s.backend_type.clone(),
+                        backend_protocol: s.backend_protocol,
                     })
                     .await;
                 tracing::info!("Hot-reloaded new server: {}", s.name);

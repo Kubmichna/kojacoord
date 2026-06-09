@@ -157,6 +157,7 @@ impl ServerManagementServer {
             online: Arc::new(AtomicBool::new(true)),
             connection_pool: None,
             backend_type: kojacoord_config::BackendType::default(),
+            backend_protocol: 0,
         };
 
         self.state.server_registry.register(server).await;

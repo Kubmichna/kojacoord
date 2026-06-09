@@ -175,12 +175,12 @@ impl PacketRelay {
         let conv_enabled = self.conversion_enabled;
         let backend_proto = self.backend_protocol;
 
-        let cb_pm_id = cb_plugin_message_id(proto);
-        let cb_disc_id = cb_play(proto, "ClientboundDisconnect");
+        let cb_pm_id = cb_plugin_message_id(backend_proto);
+        let cb_disc_id = cb_play(backend_proto, "ClientboundDisconnect");
         let sb_pm_id = sb_plugin_message_id(proto);
         let sb_chat_ids = chat_packet_ids_for(proto);
 
-        let cb_chunk_id = cb_play(proto, "ClientboundLevelChunkWithLight");
+        let cb_chunk_id = cb_play(backend_proto, "ClientboundLevelChunkWithLight");
         let (sb_move_pos_rot_id, sb_move_pos_id): (u8, u8) = {
             use kojacoord_protocol::{ProtocolVersion, VersionRegistry};
             match VersionRegistry::nearest(proto) {
@@ -270,11 +270,14 @@ impl PacketRelay {
                 }
 
                 if pkt_id == cb_disc_id {
-                    tracing::info!("backend sent Disconnect — sending custom message and closing relay");
+                    tracing::info!("backend sent Disconnect - passing through original reason and closing relay");
                     let mut cw = cw_s2c.lock().await;
 
-                    let limbo_message = "The server has shutdown, you are now in limbo until the server is back online.";
-                    let pkt = build_disconnect_packet(limbo_message, proto);
+                    let mut p = payload.clone();
+                    let reason = String::decode(&mut p)
+                        .unwrap_or_else(|_| r#"{"text":"Disconnected"}"#.to_string());
+
+                    let pkt = build_disconnect_packet(&reason, proto);
                     write_packet(&mut *cw, &pkt, client_thresh).await?;
 
                     return Err(ConnectionError::Closed);

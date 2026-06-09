@@ -49,6 +49,10 @@ async fn main() -> anyhow::Result<()> {
         let mut cfg: kojacoord_config::ProxyConfig =
             toml::from_str(kojacoord_config::DEFAULT_CONFIG)
                 .context("Failed to parse embedded default config")?;
+
+        // Generate a new stable node identity since this is the first run.
+        cfg.proxy.server_id = kojacoord_config::generate_server_id();
+
         if cfg.ensure_secrets() {
             tracing::warn!(
                 "Generated strong random auth tokens for enabled control-plane services; \

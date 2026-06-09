@@ -630,6 +630,7 @@ impl ClientConnection {
             protocol_version: self.protocol_version,
             state: ConnectionState::Play,
             current_server: None,
+            client_type: crate::session::ClientType::Java,
             properties: properties
                 .iter()
                 .map(|p| kojacoord_auth::ProfileProperty {
@@ -809,6 +810,19 @@ impl ClientConnection {
             .map(|b| b.backend_type.clone())
             .unwrap_or_default();
 
+        let backend_protocol = server
+            .as_ref()
+            .map(|b| {
+                if b.backend_protocol > 0 {
+                    b.backend_protocol
+                } else if self.protocol_version == 5 || self.protocol_version == 47 {
+                    340 // 1.12.2
+                } else {
+                    self.protocol_version
+                }
+            })
+            .unwrap_or(self.protocol_version);
+
         self.send_backend_handshake(
             &mut backend,
             original_host,
@@ -817,9 +831,12 @@ impl ClientConnection {
             &props,
             &mode,
             &backend_type,
+            backend_protocol,
         )
         .await?;
-        let backend_threshold = self.complete_backend_login(&mut backend).await?;
+        let backend_threshold = self
+            .complete_backend_login(&mut backend, backend_protocol)
+            .await?;
 
         if let Some(b) = self.state.server_registry.get(target) {
             b.player_count.fetch_add(1, Ordering::Relaxed);
@@ -1396,6 +1413,14 @@ impl ClientConnection {
 
         match backend_opt {
             Some(b) => {
+                let backend_protocol = if b.backend_protocol > 0 {
+                    b.backend_protocol
+                } else if self.protocol_version == 5 || self.protocol_version == 47 {
+                    340
+                } else {
+                    self.protocol_version
+                };
+
                 let stream_result = if let Some(pool) = &b.connection_pool {
                     pool.acquire().await.map_err(ConnectionError::Io)
                 } else {
@@ -1419,6 +1444,7 @@ impl ClientConnection {
                                 &props,
                                 &mode,
                                 &backend_type,
+                                backend_protocol,
                             )
                             .await
                         {
@@ -1432,7 +1458,10 @@ impl ClientConnection {
                                 .run_limbo_then_connect(username, session, &fwd_host, uuid)
                                 .await;
                         }
-                        match self.complete_backend_login(&mut conn).await {
+                        match self
+                            .complete_backend_login(&mut conn, backend_protocol)
+                            .await
+                        {
                             Ok(backend_threshold) => {
                                 b.player_count.fetch_add(1, Ordering::Relaxed);
                                 session.write().await.current_server = Some(server_name.clone());
@@ -1501,6 +1530,19 @@ impl ClientConnection {
             .as_ref()
             .map(|b| b.backend_type.clone())
             .unwrap_or_default();
+        let backend_protocol = selected_server
+            .as_ref()
+            .map(|b| {
+                if b.backend_protocol > 0 {
+                    b.backend_protocol
+                } else if self.protocol_version == 5 || self.protocol_version == 47 {
+                    340 // 1.12.2
+                } else {
+                    self.protocol_version
+                }
+            })
+            .unwrap_or(self.protocol_version);
+
         self.send_backend_handshake(
             &mut backend,
             fwd_host,
@@ -1509,9 +1551,12 @@ impl ClientConnection {
             &props,
             &mode,
             &backend_type,
+            backend_protocol,
         )
         .await?;
-        let backend_threshold = self.complete_backend_login(&mut backend).await?;
+        let backend_threshold = self
+            .complete_backend_login(&mut backend, backend_protocol)
+            .await?;
         if let Some(b) = self.state.routing.select(&self.state.server_registry) {
             b.player_count.fetch_add(1, Ordering::Relaxed);
             session.write().await.current_server = Some(b.name.clone());
@@ -1551,8 +1596,9 @@ impl ClientConnection {
         properties: &[kojacoord_auth::ProfileProperty],
         mode: &kojacoord_config::ForwardingMode,
         backend_type: &kojacoord_config::BackendType,
+        backend_protocol: u32,
     ) -> Result<(), ConnectionError> {
-        let proto = self.protocol_version;
+        let proto = backend_protocol;
 
         let clean_host = server_address
             .split('\0')
@@ -1661,18 +1707,21 @@ impl ClientConnection {
     async fn complete_backend_login(
         &mut self,
         conn: &mut TcpStream,
+        backend_protocol: u32,
     ) -> Result<i32, ConnectionError> {
         let proto = self.protocol_version;
         let mut backend_threshold: i32 = NO_COMPRESSION;
 
-        let id_set_compression = cb_login(proto, "ClientboundSetCompression");
-        let id_login_success = cb_login(proto, "ClientboundLoginSuccess");
-        let id_login_plugin = cb_login(proto, "ClientboundLoginPluginRequest");
-        let id_login_plugin_sb = sb_login(proto, "ServerboundLoginPluginResponse");
-        let id_login_ack = sb_login(proto, "ServerboundLoginAcknowledged");
-        let id_cfg_ack = sb_config(proto, "AcknowledgeFinishConfiguration");
-        let id_login_disconnect = cb_login(proto, "ClientboundLoginDisconnect");
-        let id_encryption_request = cb_login(proto, "ClientboundEncryptionRequest");
+        let id_set_compression = cb_login(backend_protocol, "ClientboundSetCompression");
+        let id_login_success = cb_login(backend_protocol, "ClientboundLoginSuccess");
+        let id_login_plugin = cb_login(backend_protocol, "ClientboundLoginPluginRequest");
+        let id_login_plugin_sb = sb_login(backend_protocol, "ServerboundLoginPluginResponse");
+        let id_login_ack = sb_login(backend_protocol, "ServerboundLoginAcknowledged");
+        let id_cfg_ack = sb_config(backend_protocol, "AcknowledgeFinishConfiguration");
+        let id_login_disconnect = cb_login(backend_protocol, "ClientboundLoginDisconnect");
+        let id_encryption_request_backend =
+            cb_login(backend_protocol, "ClientboundEncryptionRequest");
+        let id_encryption_request_client = cb_login(proto, "ClientboundEncryptionRequest");
 
         loop {
             let pkt_bytes = crate::packet_io::read_packet(conn, backend_threshold)
@@ -1689,7 +1738,7 @@ impl ClientConnection {
 
             tracing::trace!(packet_id, backend_threshold, "backend login packet");
 
-            if packet_id == id_encryption_request {
+            if packet_id == id_encryption_request_backend {
                 let ver = nearest(proto);
                 if matches!(ver, ProtocolVersion::V1_7_10 | ProtocolVersion::V1_8) {
                     use kojacoord_protocol::versions::v1_16_5::login::ClientboundEncryptionRequest;
@@ -1697,7 +1746,7 @@ impl ClientConnection {
                         .map_err(ConnectionError::Protocol)?;
 
                     let mut new_payload = BytesMut::new();
-                    VarInt(id_encryption_request as i32).encode(&mut new_payload)?;
+                    VarInt(id_encryption_request_client as i32).encode(&mut new_payload)?;
 
                     if matches!(ver, ProtocolVersion::V1_7_10) {
                         use kojacoord_protocol::versions::v1_7_10::login::ClientboundEncryptionRequest as V1_7_Enc;
@@ -2034,7 +2083,14 @@ impl ClientConnection {
             .unwrap_or(false);
 
         let backend_protocol = if is_lobby {
-            self.state.config.proxy.lobby_server_protocol
+            let p = self.state.config.proxy.lobby_server_protocol;
+            if p > 0 {
+                p
+            } else if self.protocol_version == 5 || self.protocol_version == 47 {
+                340
+            } else {
+                self.protocol_version
+            }
         } else {
             let server_protocol = self
                 .state
@@ -2079,7 +2135,7 @@ impl ClientConnection {
             client_compression_threshold: self.compression_threshold,
             backend_compression_threshold,
             ml_kind: self.ml_session.kind,
-            conversion_enabled: is_lobby,
+            conversion_enabled,
             backend_protocol,
         }
         .run()

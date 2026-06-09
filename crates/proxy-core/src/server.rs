@@ -15,6 +15,7 @@ pub struct BackendServer {
     pub online: Arc<AtomicBool>,
     pub connection_pool: Option<Arc<BackendConnectionPool>>,
     pub backend_type: BackendType,
+    pub backend_protocol: u32,
 }
 
 impl BackendServer {
